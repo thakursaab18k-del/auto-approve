@@ -2,29 +2,33 @@ import os
 import asyncio
 from fastapi import FastAPI
 import uvicorn
-from telethon import TelegramClient
-from telethon.tl.functions.channels import GetParticipantsRequest
-from telethon.tl.types import ChannelParticipantsMentions
+from telethon import TelegramClient, functions, types
 from telethon.errors import FloodWaitError
 
 app = FastAPI()
 
+# --- CONFIGURATION (Pulled securely from Render Environment) ---
 API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH", "")
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "") # This will be your phone number now
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "") # This holds your phone number now
 CHANNEL_PEER = os.environ.get("CHANNEL_PEER", "")
 
+# We initialize the client
 bot = TelegramClient('bot_session', API_ID, API_HASH)
 
 async def approve_past_requests():
-    print("Connecting to Telegram...")
-    # If BOT_TOKEN is a phone number, it will prompt you in the Render logs for the login code
-    if BOT_TOKEN.startswith('+') or BOT_TOKEN.isdigit():
-        await bot.start(phone=BOT_TOKEN)
-    else:
-        await bot.start(bot_token=BOT_TOKEN)
-        
-    print("Login successful!")
+    print("Connecting to Telegram using your personal account session...")
+    try:
+        # If BOT_TOKEN is your phone number, it logs you in as a user account
+        if BOT_TOKEN.startswith('+') or BOT_TOKEN.isdigit():
+            await bot.start(phone=BOT_TOKEN)
+        else:
+            await bot.start(bot_token=BOT_TOKEN)
+            
+        print("🎉 Login successful! Your personal account is connected.")
+    except Exception as login_err:
+        print(f"❌ Login failed. Make sure you entered the correct code in the logs: {login_err}")
+        return
     
     try:
         if CHANNEL_PEER.startswith("-100") or CHANNEL_PEER.isdigit():
@@ -42,9 +46,9 @@ async def approve_past_requests():
     
     while True:
         try:
-            participants = await bot(GetParticipantsRequest(
+            participants = await bot(functions.channels.GetParticipantsRequest(
                 channel=channel,
-                filter=ChannelParticipantsMentions(),
+                filter=types.ChannelParticipantsMentions(),
                 offset=0,
                 limit=limit,
                 hash=0
@@ -54,17 +58,22 @@ async def approve_past_requests():
                 print("✅ All past pending requests have been cleared!")
                 break
                 
-            print(f"📥 Found {len(participants.users)} requests. Approving...")
+            print(f"📥 Found {len(participants.users)} requests. Starting approvals...")
 
             for user in participants.users:
                 try:
-                    await bot.hide_chat_join_request(channel, user.id, approve=True)
+                    # Using raw user-session safe API method
+                    await bot(functions.channels.HideChatJoinRequestRequest(
+                        peer=channel,
+                        user_id=user.id,
+                        approved=True
+                    ))
                     print(f"Approved: {user.first_name} ({user.id})")
                     approved_count += 1
-                    await asyncio.sleep(1.5) # Safe delay to avoid bans
+                    await asyncio.sleep(1.5) # Safe delay to avoid account bans
                     
                 except FloodWaitError as e:
-                    print(f"Rate limited. Waiting {e.seconds} seconds...")
+                    print(f"Rate limited by Telegram. Waiting {e.seconds} seconds...")
                     await asyncio.sleep(e.seconds)
                 except Exception as e:
                     print(f"Failed to approve user {user.id}: {e}")
@@ -77,10 +86,11 @@ async def approve_past_requests():
             break
 
     print(f"🎉 Task Complete! Total approved from past: {approved_count}")
+    await bot.disconnect()
 
 @app.get("/")
 def home():
-    return {"status": "Service is running"}
+    return {"status": "User account service is active"}
 
 @app.on_event("startup")
 async def startup_event():
